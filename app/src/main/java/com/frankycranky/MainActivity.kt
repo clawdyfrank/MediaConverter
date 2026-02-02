@@ -25,6 +25,9 @@ import com.arthenica.ffmpegkit.ReturnCode
 import com.arthenica.ffmpegkit.Session
 import com.arthenica.ffmpegkit.Log
 import com.arthenica.ffmpegkit.Statistics
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
@@ -50,6 +53,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MediaConverterApp() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
     var selectedVideoName by remember { mutableStateOf("") }
     var selectedFormat by remember { mutableStateOf("mp3") }
@@ -193,7 +197,7 @@ fun MediaConverterApp() {
                         isConverting = true
                         progress = 0f
                         statusMessage = "Starting conversion..."
-                        convertVideoToAudio(context, uri, selectedVideoName, selectedFormat, selectedBitrate, 
+                        convertVideoToAudio(context, coroutineScope, uri, selectedVideoName, selectedFormat, selectedBitrate, 
                             onProgress = { p -> progress = p },
                             onResult = { success, message ->
                                 isConverting = false
@@ -228,6 +232,7 @@ fun MediaConverterApp() {
 
 fun convertVideoToAudio(
     context: Context,
+    scope: CoroutineScope,
     videoUri: Uri,
     videoName: String,
     format: String,
@@ -253,7 +258,7 @@ fun convertVideoToAudio(
     val outputFile = File(outputDir, outputFileName)
     val outputFilePath = outputFile.absolutePath
 
-    // 1. Get media information using FFprobeKit (correct class for 6.x)
+    // FFmpegKit 6.x FFprobeKit async
     FFprobeKit.getMediaInformationAsync(inputFilePath) { infoSession ->
         val mediaInformation = infoSession.mediaInformation
         val duration = mediaInformation?.duration?.toDouble() ?: 1.0
@@ -270,23 +275,26 @@ fun convertVideoToAudio(
             "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
         }
 
-        // 2. Execute conversion using FFmpegKit
         FFmpegKit.executeAsync(command, { conversionSession ->
             val returnCode = conversionSession.returnCode
-            if (ReturnCode.isSuccess(returnCode)) {
+            val success = ReturnCode.isSuccess(returnCode)
+            val resultMsg = if (success) "Success! Saved to Music/Convert" else "Failed: ${conversionSession.failStackTrace}"
+            
+            // Switch back to Main Thread for UI updates (Toast, etc)
+            scope.launch(Dispatchers.Main) {
                 onProgress(1f)
-                onResult(true, "Success! Saved to Music/Convert")
-            } else {
-                onResult(false, "Failed: ${conversionSession.failStackTrace}")
+                onResult(success, resultMsg)
             }
+            
             File(inputFilePath).delete()
-        }, { _: Log -> 
-            // Optional log
-        }, { statistics ->
+        }, { _ -> }, { statistics ->
             val timeInMilliseconds = statistics.time
             if (timeInMilliseconds > 0) {
                 val p = (timeInMilliseconds / (duration * 1000)).toFloat()
-                onProgress(p.coerceIn(0f, 0.99f))
+                // Update progress on Main Thread
+                scope.launch(Dispatchers.Main) {
+                    onProgress(p.coerceIn(0f, 0.99f))
+                }
             }
         })
     }
