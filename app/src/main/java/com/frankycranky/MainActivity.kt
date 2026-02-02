@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.OpenableColumns
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,7 +24,6 @@ import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.FFprobeKit
 import com.arthenica.ffmpegkit.ReturnCode
 import com.arthenica.ffmpegkit.Session
-import com.arthenica.ffmpegkit.Log
 import com.arthenica.ffmpegkit.Statistics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +31,8 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
+
+private const val TAG = "MediaConverter"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -240,77 +242,90 @@ fun convertVideoToAudio(
     onProgress: (Float) -> Unit,
     onResult: (Boolean, String) -> Unit
 ) {
-    val inputFilePath = copyUriToCache(context, videoUri)
-    if (inputFilePath == null) {
-        onResult(false, "Failed to process input file")
-        return
-    }
-
-    val outputDir = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-        "Convert"
-    )
-    if (!outputDir.exists()) {
-        outputDir.mkdirs()
-    }
-
-    val outputFileName = videoName.substringBeforeLast(".") + "." + format
-    val outputFile = File(outputDir, outputFileName)
-    val outputFilePath = outputFile.absolutePath
-
-    // FFmpegKit 6.x FFprobeKit async
-    FFprobeKit.getMediaInformationAsync(inputFilePath) { infoSession ->
-        val mediaInformation = infoSession.mediaInformation
-        val duration = mediaInformation?.duration?.toDouble() ?: 1.0
-
-        val audioCodec = when (format) {
-            "mp3" -> "libmp3lame"
-            "m4a" -> "aac"
-            else -> "pcm_s16le"
-        }
-        
-        val command = if (format == "wav") {
-            "-i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
-        } else {
-            "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
+    scope.launch(Dispatchers.IO) {
+        val inputFilePath = copyUriToCache(context, videoUri)
+        if (inputFilePath == null) {
+            scope.launch(Dispatchers.Main) { onResult(false, "Failed to process input file") }
+            return@launch
         }
 
-        FFmpegKit.executeAsync(command, { conversionSession ->
-            val returnCode = conversionSession.returnCode
-            val success = ReturnCode.isSuccess(returnCode)
-            val resultMsg = if (success) "Success! Saved to Music/Convert" else "Failed: ${conversionSession.failStackTrace}"
+        val outputDir = File(
+            context.getExternalFilesDir(Environment.DIRECTORY_MUSIC),
+            "Convert"
+        )
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
+
+        val outputFileName = videoName.substringBeforeLast(".") + "_" + System.currentTimeMillis() + "." + format
+        val outputFile = File(outputDir, outputFileName)
+        val outputFilePath = outputFile.absolutePath
+
+        Log.d(TAG, "Input: $inputFilePath")
+        Log.d(TAG, "Output: $outputFilePath")
+
+        FFprobeKit.getMediaInformationAsync(inputFilePath) { infoSession ->
+            val mediaInformation = infoSession.mediaInformation
+            val duration = mediaInformation?.duration?.toDouble() ?: 1.0
             
-            // Switch back to Main Thread for UI updates (Toast, etc)
-            scope.launch(Dispatchers.Main) {
-                onProgress(1f)
-                onResult(success, resultMsg)
+            val audioCodec = when (format) {
+                "mp3" -> "libmp3lame"
+                "m4a" -> "aac"
+                else -> "pcm_s16le"
             }
             
-            File(inputFilePath).delete()
-        }, { _ -> }, { statistics ->
-            val timeInMilliseconds = statistics.time
-            if (timeInMilliseconds > 0) {
-                val p = (timeInMilliseconds / (duration * 1000)).toFloat()
-                // Update progress on Main Thread
+            // Simplified command with logs
+            val command = if (format == "wav") {
+                "-i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
+            } else {
+                "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
+            }
+
+            Log.d(TAG, "Executing command: $command")
+
+            FFmpegKit.executeAsync(command, { conversionSession ->
+                val returnCode = conversionSession.returnCode
+                val isSuccess = ReturnCode.isSuccess(returnCode)
+                
+                val logs = conversionSession.allLogsAsString
+                Log.d(TAG, "FFmpeg Logs: $logs")
+
                 scope.launch(Dispatchers.Main) {
-                    onProgress(p.coerceIn(0f, 0.99f))
+                    if (isSuccess) {
+                        onProgress(1f)
+                        onResult(true, "Success! Saved to App Music folder")
+                    } else {
+                        val failMsg = conversionSession.failStackTrace ?: "Unknown error (check logcat)"
+                        onResult(false, "Failed: $failMsg")
+                    }
                 }
-            }
-        })
+                File(inputFilePath).delete()
+            }, { log ->
+                Log.d(TAG, "FFmpeg Output: ${log.message}")
+            }, { statistics: Statistics ->
+                val timeInMilliseconds = statistics.time
+                if (timeInMilliseconds > 0) {
+                    val p = (timeInMilliseconds / (duration * 1000)).toFloat()
+                    scope.launch(Dispatchers.Main) {
+                        onProgress(p.coerceIn(0f, 0.99f))
+                    }
+                }
+            })
+        }
     }
 }
 
 fun copyUriToCache(context: Context, uri: Uri): String? {
     return try {
         val inputStream = context.contentResolver.openInputStream(uri)
-        val tempFile = File(context.cacheDir, "temp_video_input")
+        val tempFile = File(context.cacheDir, "temp_video_${System.currentTimeMillis()}.mp4")
         val outputStream = FileOutputStream(tempFile)
         inputStream?.copyTo(outputStream)
         inputStream?.close()
         outputStream.close()
         tempFile.absolutePath
     } catch (e: Exception) {
-        e.printStackTrace()
+        Log.e(TAG, "Cache error", e)
         null
     }
 }
