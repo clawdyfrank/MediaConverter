@@ -20,8 +20,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.frankycranky.ui.theme.MediaConverterTheme
 import com.arthenica.ffmpegkit.FFmpegKit
-import com.arthenica.ffmpegkit.FFmpegKitConfig
+import com.arthenica.ffmpegkit.FFprobeKit
 import com.arthenica.ffmpegkit.ReturnCode
+import com.arthenica.ffmpegkit.Session
+import com.arthenica.ffmpegkit.Log
+import com.arthenica.ffmpegkit.Statistics
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
@@ -250,35 +253,43 @@ fun convertVideoToAudio(
     val outputFile = File(outputDir, outputFileName)
     val outputFilePath = outputFile.absolutePath
 
-    // Workaround for getMediaInformation (since Async is proving difficult to reference)
-    // We'll use the main executeAsync and get duration from statistics if possible,
-    // or just assume 100% at the end for now to ensure compilation.
-    
-    val audioCodec = when (format) {
-        "mp3" -> "libmp3lame"
-        "m4a" -> "aac"
-        else -> "pcm_s16le"
-    }
-    
-    val command = if (format == "wav") {
-        "-i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
-    } else {
-        "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
-    }
+    // 1. Get media information using FFprobeKit (correct class for 6.x)
+    FFprobeKit.getMediaInformationAsync(inputFilePath) { infoSession ->
+        val mediaInformation = infoSession.mediaInformation
+        val duration = mediaInformation?.duration?.toDouble() ?: 1.0
 
-    FFmpegKit.executeAsync(command, { session ->
-        val returnCode = session.returnCode
-        if (ReturnCode.isSuccess(returnCode)) {
-            onProgress(1f)
-            onResult(true, "Success! Saved to Music/Convert")
-        } else {
-            onResult(false, "Failed: ${session.failStackTrace}")
+        val audioCodec = when (format) {
+            "mp3" -> "libmp3lame"
+            "m4a" -> "aac"
+            else -> "pcm_s16le"
         }
-        File(inputFilePath).delete()
-    }, { _ -> }, { statistics ->
-        // Progress update without total duration (incremental update)
-        // In a real app, we'd fetch duration first.
-    })
+        
+        val command = if (format == "wav") {
+            "-i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
+        } else {
+            "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
+        }
+
+        // 2. Execute conversion using FFmpegKit
+        FFmpegKit.executeAsync(command, { conversionSession ->
+            val returnCode = conversionSession.returnCode
+            if (ReturnCode.isSuccess(returnCode)) {
+                onProgress(1f)
+                onResult(true, "Success! Saved to Music/Convert")
+            } else {
+                onResult(false, "Failed: ${conversionSession.failStackTrace}")
+            }
+            File(inputFilePath).delete()
+        }, { _: Log -> 
+            // Optional log
+        }, { statistics ->
+            val timeInMilliseconds = statistics.time
+            if (timeInMilliseconds > 0) {
+                val p = (timeInMilliseconds / (duration * 1000)).toFloat()
+                onProgress(p.coerceIn(0f, 0.99f))
+            }
+        })
+    }
 }
 
 fun copyUriToCache(context: Context, uri: Uri): String? {
