@@ -48,6 +48,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
+    implementation("com.arthenica:smart-exception-java:0.2.1")
     // implementation(libs.ffmpeg.kit)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
