@@ -15,10 +15,10 @@
 
 ### Monthly Invoicing (Google Sheets)
 - **File:** `Invoice - 26` (ID: `1byyG6am58wYqX278-Nicdz7MV6MVZR7uYZIFFHvEJP4`)
-- **Workflow:** Duplicate the previous month's sheet (named by month number, e.g., '01', '02').
+- **Workflow:** Duplicate the previous month's sheet (named by month number, e.g., '01', '02'). Always copy from the most recent month's sheet (e.g., to create February '02', duplicate January '01').
 - **Formatting:**
   - **Invoice #:** Format as `'00yymm` (e.g., `'002601`). The leading `'` is required for text formatting.
   - **Invoice Date:** First day of the month *following* the invoice period (e.g., February 1st for January's invoice).
   - **Description:** Update month/year in the description text.
-  - **Amount:** Update the **line item amount** (e.g., cell G18). The **Total** (e.g., cell G20) should be a sum of the line items.
+  - **Amount:** Update the **line item amount** (e.g., cell G16). The **Total** (e.g., cell G19) should be a sum of the line items.
 - **Auth:** Uses `google_tokens.json` in the workspace root.
