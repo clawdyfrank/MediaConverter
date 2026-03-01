@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MediaConverterApp()
+                    MainScreen()
                 }
             }
         }
@@ -53,7 +53,39 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MediaConverterApp() {
+fun MainScreen() {
+    var selectedTab by remember { mutableStateOf(0) }
+
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    icon = { Text("🎵") },
+                    label = { Text("Converter") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Text("🌐") },
+                    label = { Text("Browser") }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(modifier = Modifier.padding(innerPadding)) {
+            when (selectedTab) {
+                0 -> ConverterScreen()
+                1 -> BrowserScreen()
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConverterScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
@@ -78,157 +110,148 @@ fun MediaConverterApp() {
     var formatExpanded by remember { mutableStateOf(false) }
     var bitrateExpanded by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("Media Converter") }
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Top
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = if (selectedVideoName.isEmpty()) "No file selected" else "File: $selectedVideoName",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                if (isConverting || progress > 0f) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Text(
-                        text = if (selectedVideoName.isEmpty()) "No file selected" else "File: $selectedVideoName",
-                        style = MaterialTheme.typography.bodyLarge
+                        text = "Progress: ${(progress * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.align(Alignment.End)
                     )
-                    if (isConverting || progress > 0f) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            text = "Progress: ${(progress * 100).roundToInt()}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.align(Alignment.End)
-                        )
-                    }
                 }
             }
-
-            Button(
-                onClick = { videoPickerLauncher.launch("video/*") },
-                enabled = !isConverting,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Select Video")
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Box(modifier = Modifier.weight(1f)) {
-                    ExposedDropdownMenuBox(
-                        expanded = formatExpanded,
-                        onExpandedChange = { formatExpanded = !formatExpanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedFormat.uppercase(),
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Format") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = formatExpanded) },
-                            modifier = Modifier.menuAnchor()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = formatExpanded,
-                            onDismissRequest = { formatExpanded = false }
-                        ) {
-                            formats.forEach { format ->
-                                DropdownMenuItem(
-                                    text = { Text(format.uppercase()) },
-                                    onClick = {
-                                        selectedFormat = format
-                                        formatExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                Box(modifier = Modifier.weight(1f)) {
-                    ExposedDropdownMenuBox(
-                        expanded = bitrateExpanded,
-                        onExpandedChange = { bitrateExpanded = !bitrateExpanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedBitrate,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Bitrate") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bitrateExpanded) },
-                            modifier = Modifier.menuAnchor()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = bitrateExpanded,
-                            onDismissRequest = { bitrateExpanded = false }
-                        ) {
-                            bitrates.forEach { bitrate ->
-                                DropdownMenuItem(
-                                    text = { Text(bitrate) },
-                                    onClick = {
-                                        selectedBitrate = bitrate
-                                        bitrateExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            Button(
-                onClick = {
-                    selectedVideoUri?.let { uri ->
-                        isConverting = true
-                        progress = 0f
-                        statusMessage = "Starting conversion..."
-                        convertVideoToAudio(context, coroutineScope, uri, selectedVideoName, selectedFormat, selectedBitrate, 
-                            onProgress = { p -> progress = p },
-                            onResult = { success, message ->
-                                isConverting = false
-                                statusMessage = message
-                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                            }
-                        )
-                    }
-                },
-                enabled = selectedVideoUri != null && !isConverting,
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp)
-            ) {
-                if (isConverting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Converting...")
-                } else {
-                    Text("Convert to Audio")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(text = statusMessage, style = MaterialTheme.typography.bodySmall)
         }
+
+        Button(
+            onClick = { videoPickerLauncher.launch("video/*") },
+            enabled = !isConverting,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Select Video")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Box(modifier = Modifier.weight(1f)) {
+                ExposedDropdownMenuBox(
+                    expanded = formatExpanded,
+                    onExpandedChange = { formatExpanded = !formatExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = selectedFormat.uppercase(),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Format") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = formatExpanded) },
+                        modifier = Modifier.menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = formatExpanded,
+                        onDismissRequest = { formatExpanded = false }
+                    ) {
+                        formats.forEach { format ->
+                            DropdownMenuItem(
+                                text = { Text(format.uppercase()) },
+                                onClick = {
+                                    selectedFormat = format
+                                    formatExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Box(modifier = Modifier.weight(1f)) {
+                ExposedDropdownMenuBox(
+                    expanded = bitrateExpanded,
+                    onExpandedChange = { bitrateExpanded = !bitrateExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = selectedBitrate,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Bitrate") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bitrateExpanded) },
+                        modifier = Modifier.menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = bitrateExpanded,
+                        onDismissRequest = { bitrateExpanded = false }
+                    ) {
+                        bitrates.forEach { bitrate ->
+                            DropdownMenuItem(
+                                text = { Text(bitrate) },
+                                onClick = {
+                                    selectedBitrate = bitrate
+                                    bitrateExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = {
+                selectedVideoUri?.let { uri ->
+                    isConverting = true
+                    progress = 0f
+                    statusMessage = "Starting conversion..."
+                    convertVideoToAudio(context, coroutineScope, uri, selectedVideoName, selectedFormat, selectedBitrate, 
+                        onProgress = { p -> progress = p },
+                        onResult = { success, message ->
+                            isConverting = false
+                            statusMessage = message
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            },
+            enabled = selectedVideoUri != null && !isConverting,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(16.dp)
+        ) {
+            if (isConverting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Converting...")
+            } else {
+                Text("Convert to Audio")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(text = statusMessage, style = MaterialTheme.typography.bodySmall)
     }
 }
 
