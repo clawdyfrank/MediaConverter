@@ -1,6 +1,7 @@
 package com.frankycranky
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -28,9 +29,11 @@ import com.arthenica.ffmpegkit.Statistics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
+import java.util.Locale
 
 private const val TAG = "MediaConverter"
 
@@ -54,7 +57,7 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     Scaffold(
         bottomBar = {
@@ -95,14 +98,37 @@ fun ConverterScreen() {
     var isConverting by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Select a video to start") }
     var progress by remember { mutableFloatStateOf(0f) }
+    
+    // Video Trimming State
+    var totalDuration by remember { mutableFloatStateOf(0f) }
+    var sliderPosition by remember { mutableStateOf(0f..0f) }
 
     val videoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         selectedVideoUri = uri
         selectedVideoName = uri?.let { getFileName(context, it) } ?: ""
-        statusMessage = if (uri != null) "Video selected: $selectedVideoName" else "Selection cancelled"
         progress = 0f
+        totalDuration = 0f
+        sliderPosition = 0f..0f
+        
+        if (uri != null) {
+            statusMessage = "Loading video details..."
+            coroutineScope.launch(Dispatchers.IO) {
+                val durationMs = getVideoDuration(context, uri)
+                withContext(Dispatchers.Main) {
+                    if (durationMs > 0) {
+                        totalDuration = durationMs / 1000f
+                        sliderPosition = 0f..totalDuration
+                        statusMessage = "Video selected: $selectedVideoName"
+                    } else {
+                        statusMessage = "Video selected: $selectedVideoName (Duration unknown)"
+                    }
+                }
+            }
+        } else {
+            statusMessage = "Selection cancelled"
+        }
     }
 
     val formats = listOf("mp3", "m4a", "wav")
@@ -150,6 +176,32 @@ fun ConverterScreen() {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // Trimming UI
+        if (totalDuration > 0f) {
+            Text(
+                text = "Trim Audio (Optional)",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            RangeSlider(
+                value = sliderPosition,
+                onValueChange = { sliderPosition = it },
+                valueRange = 0f..totalDuration,
+                enabled = !isConverting,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = formatTime(sliderPosition.start), style = MaterialTheme.typography.bodySmall)
+                Text(text = "Duration: ${formatTime(sliderPosition.endInclusive - sliderPosition.start)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                Text(text = formatTime(sliderPosition.endInclusive), style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         Row(modifier = Modifier.fillMaxWidth()) {
             Box(modifier = Modifier.weight(1f)) {
@@ -223,7 +275,13 @@ fun ConverterScreen() {
                     isConverting = true
                     progress = 0f
                     statusMessage = "Starting conversion..."
-                    convertVideoToAudio(context, coroutineScope, uri, selectedVideoName, selectedFormat, selectedBitrate, 
+                    
+                    val trimStart = if (totalDuration > 0f) sliderPosition.start else 0f
+                    val trimEnd = if (totalDuration > 0f) sliderPosition.endInclusive else 0f
+                    
+                    convertVideoToAudio(
+                        context, coroutineScope, uri, selectedVideoName, selectedFormat, selectedBitrate,
+                        trimStart, trimEnd,
                         onProgress = { p -> progress = p },
                         onResult = { success, message ->
                             isConverting = false
@@ -255,6 +313,30 @@ fun ConverterScreen() {
     }
 }
 
+fun formatTime(seconds: Float): String {
+    val mins = (seconds / 60).toInt()
+    val secs = (seconds % 60).toInt()
+    return String.format(Locale.US, "%02d:%02d", mins, secs)
+}
+
+fun getVideoDuration(context: Context, uri: Uri): Long {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(context, uri)
+        val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+        time?.toLong() ?: 0L
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to get duration", e)
+        0L
+    } finally {
+        try {
+            retriever.release()
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+}
+
 fun convertVideoToAudio(
     context: Context,
     scope: CoroutineScope,
@@ -262,6 +344,8 @@ fun convertVideoToAudio(
     videoName: String,
     format: String,
     bitrate: String,
+    trimStart: Float,
+    trimEnd: Float,
     onProgress: (Float) -> Unit,
     onResult: (Boolean, String) -> Unit
 ) {
@@ -289,7 +373,10 @@ fun convertVideoToAudio(
 
         FFprobeKit.getMediaInformationAsync(inputFilePath) { infoSession ->
             val mediaInformation = infoSession.mediaInformation
-            val duration = mediaInformation?.duration?.toDouble() ?: 1.0
+            
+            // Expected output duration
+            val durationToProcess = if (trimEnd > trimStart) (trimEnd - trimStart).toDouble() 
+                                   else (mediaInformation?.duration?.toDouble() ?: 1.0)
             
             val audioCodec = when (format) {
                 "mp3" -> "libmp3lame"
@@ -297,11 +384,14 @@ fun convertVideoToAudio(
                 else -> "pcm_s16le"
             }
             
-            // Simplified command with logs
+            val timeParams = if (trimEnd > trimStart) {
+                "-ss ${trimStart} -to ${trimEnd}"
+            } else ""
+
             val command = if (format == "wav") {
-                "-i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
+                "$timeParams -i \"$inputFilePath\" -vn -acodec $audioCodec \"$outputFilePath\" -y"
             } else {
-                "-i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
+                "$timeParams -i \"$inputFilePath\" -vn -acodec $audioCodec -ab $bitrate \"$outputFilePath\" -y"
             }
 
             Log.d(TAG, "Executing command: $command")
@@ -318,8 +408,8 @@ fun convertVideoToAudio(
                         onProgress(1f)
                         onResult(true, "Success! Saved to App Music folder")
                     } else {
-                        val failMsg = conversionSession.failStackTrace ?: "Unknown error (check logcat)"
-                        onResult(false, "Failed: $failMsg")
+                        val failStackTrace = conversionSession.failStackTrace ?: "Unknown error"
+                        onResult(false, "Failed: $failStackTrace")
                     }
                 }
                 File(inputFilePath).delete()
@@ -328,7 +418,7 @@ fun convertVideoToAudio(
             }, { statistics: Statistics ->
                 val timeInMilliseconds = statistics.time
                 if (timeInMilliseconds > 0) {
-                    val p = (timeInMilliseconds / (duration * 1000)).toFloat()
+                    val p = (timeInMilliseconds / (durationToProcess * 1000)).toFloat()
                     scope.launch(Dispatchers.Main) {
                         onProgress(p.coerceIn(0f, 0.99f))
                     }
